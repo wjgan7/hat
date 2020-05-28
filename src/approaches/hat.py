@@ -98,7 +98,7 @@ class Appr(object):
         # Weights mask
         self.mask_back={}
         valid, total = 0, 0
-        for n, p in self.model.named_parameters():
+        for n,_ in self.model.named_parameters():
             vals=self.model.get_view_for(n,self.mask_pre)
             if vals is not None:
                 self.mask_back[n]=1-vals
@@ -141,8 +141,7 @@ class Appr(object):
 
             # Compensate embedding gradients
             for n,p in self.model.named_parameters():
-                if n.startswith('e'):
-                # if 'ec1' in n or 'ec2' in n or 'efc' in n:
+                if 'ec' in n or 'efc' in n:
                     num=torch.cosh(torch.clamp(s*p.data,-thres_cosh,thres_cosh))+1
                     den=torch.cosh(p.data)+1
                     p.grad.data*=self.smax/s*num/den
@@ -153,8 +152,7 @@ class Appr(object):
 
             # Constrain embeddings
             for n,p in self.model.named_parameters():
-                if n.startswith('e'):
-                # if 'ec1' in n or 'ec2' in n or 'efc' in n:
+                if 'ec' in n or 'efc' in n:
                     p.data=torch.clamp(p.data,-thres_emb,thres_emb)
 
             #print(masks[-1].data.view(1,-1))
