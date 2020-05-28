@@ -34,15 +34,33 @@ class BasicBlock(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
-    def forward(self, x):
+        # HAT code
+        self.ec1 = nn.Embedding(num_tasks, planes)
+        self.ec2 = nn.Embedding(num_tasks, planes)
+
+    def mask(self, t, s=1):
+        gc1 = torch.sigmoid(s * self.ec1(t))
+        gc2 = torch.sigmoid(s * self.ec2(t))
+        return [gc1, gc2]
+
+    def forward(self, x, masks):
         identity = x
+
+        # HAT code
+        gc1, gc2 = masks
 
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
 
+        # HAT code
+        out = out * gc1.view(1, -1, 1, 1).expand_as(out)
+
         out = self.conv2(out)
         out = self.bn2(out)
+
+        # HAT code
+        out = out * gc2.view(1, -1, 1, 1).expand_as(out)
 
         if self.downsample is not None:
             identity = self.downsample(x)
@@ -57,7 +75,7 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
-                 norm_layer=None):
+                 norm_layer=None, taskcla=None):
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -72,6 +90,15 @@ class ResNet(nn.Module):
         if len(replace_stride_with_dilation) != 3:
             raise ValueError("replace_stride_with_dilation should be None "
                              "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
+
+        # HAT code
+        self.taskcla = taskcla
+        self.num_tasks = len(self.taskcla)
+        self.ec1 = nn.Embedding(self.num_tasks, self.inplanes)
+        self.last = nn.ModuleList()
+        for _, n in self.taskcla:
+            self.last.append(torch.nn.Linear(512 * block.expansion, n))
+
         self.groups = groups
         self.base_width = width_per_group
         self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3,
@@ -87,7 +114,7 @@ class ResNet(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -101,9 +128,9 @@ class ResNet(nn.Module):
         # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
         if zero_init_residual:
             for m in self.modules():
-                if isinstance(m, Bottleneck):
-                    nn.init.constant_(m.bn3.weight, 0)
-                elif isinstance(m, BasicBlock):
+                # if isinstance(m, Bottleneck):
+                    # nn.init.constant_(m.bn3.weight, 0)
+                if isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
@@ -121,53 +148,182 @@ class ResNet(nn.Module):
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample, self.groups,
-                            self.base_width, previous_dilation, norm_layer))
+                            self.base_width, previous_dilation, norm_layer,
+                            self.num_tasks))
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes, groups=self.groups,
                                 base_width=self.base_width, dilation=self.dilation,
-                                norm_layer=norm_layer))
+                                norm_layer=norm_layer, num_tasks=self.num_tasks))
 
         return nn.Sequential(*layers)
 
-    def _forward_impl(self, x):
+    def mask(self, t, s=1):
+        gc1 = torch.sigmoid(s * self.ec1(t))
+        layer_masks = sum([
+            self.layer1[0].mask(t, s),
+            self.layer1[1].mask(t, s),
+            self.layer2[0].mask(t, s),
+            self.layer2[1].mask(t, s),
+            self.layer3[0].mask(t, s),
+            self.layer3[1].mask(t, s),
+            self.layer4[0].mask(t, s),
+            self.layer4[1].mask(t, s),
+        ], [])
+        return [gc1] + layer_masks
+
+    def _forward_impl(self, t, x, s=1):
         # See note [TorchScript super()]
+
+        # HAT code
+        masks = self.mask(t, s)
+        gc1 = masks[0]
+
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
+        # HAT code
+        x = x * gc1.view(1, -1, 1, 1).expand_as(x)
+
+        x = self.layer1[0](x, masks[1:3])
+        x = self.layer1[1](x, masks[3:5])
+        x = self.layer2[0](x, masks[5:7])
+        x = self.layer2[1](x, masks[7:9])
+        x = self.layer3[0](x, masks[9:11])
+        x = self.layer3[1](x, masks[11:13])
+        x = self.layer4[0](x, masks[13:15])
+        x = self.layer4[1](x, masks[15:17])
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
-        x = self.fc(x)
+        y = []
+        for i in range(self.num_tasks):
+            y.append(self.last[i](x))
 
-        return x
+        return y, masks
 
-    def forward(self, x):
-        return self._forward_impl(x)
+    def forward(self, t, x, s=1):
+        return self._forward_impl(t, x, s)
+
+    def get_view_for(self, n, masks):
+        gc1 = masks[0]
+        l10gc1, l10gc2 = masks[1:3]
+        l11gc1, l11gc2 = masks[3:5]
+        l20gc1, l20gc2 = masks[5:7]
+        l21gc1, l21gc2 = masks[7:9]
+        l30gc1, l30gc2 = masks[9:11]
+        l31gc1, l31gc2 = masks[11:13]
+        l40gc1, l40gc2 = masks[13:15]
+        l41gc1, l41gc2 = masks[15:17]
+        if n == 'conv1.weight':
+            return gc1.data.view(-1, 1, 1, 1).expand_as(self.conv1.weight)
+        elif n == 'conv1.bias':
+            return gc1.data.view(-1)
+
+        if n == 'layer1.0.conv1.weight':
+            post = l10gc1.data.view(-1, 1, 1, 1).expand_as(self.layer1[0].conv1.weight)
+            pre = gc1.data.view(1, -1, 1, 1).expand_as(self.layer1[0].conv1.weight)
+            return torch.min(post, pre)
+        elif n == 'layer1.0.conv1.bias':
+            return l10gc1.data.view(-1)
+        elif n == 'layer1.0.conv2.weight':
+            post = l10gc2.data.view(-1, 1, 1, 1).expand_as(self.layer1[0].conv2.weight)
+            pre = l10gc1.data.view(1, -1, 1, 1).expand_as(self.layer1[0].conv2.weight)
+            return torch.min(post, pre)
+        elif n == 'layer1.0.conv2.bias':
+            return l10gc2.data.view(-1)
+        elif n == 'layer1.1.conv1.weight':
+            post = l11gc1.data.view(-1, 1, 1, 1).expand_as(self.layer1[1].conv1.weight)
+            pre = l10gc2.data.view(1, -1, 1, 1).expand_as(self.layer1[1].conv1.weight)
+            return torch.min(post, pre)
+        elif n == 'layer1.1.conv1.bias':
+            return l11gc1.data.view(-1)
+        elif n == 'layer1.1.conv2.weight':
+            post = l11gc2.data.view(-1, 1, 1, 1).expand_as(self.layer1[1].conv2.weight)
+            pre = l11gc1.data.view(1, -1, 1, 1).expand_as(self.layer1[1].conv2.weight)
+            return torch.min(post, pre)
+        elif n == 'layer1.1.conv2.bias':
+            return l11gc2.data.view(-1)
+
+        if n == 'layer2.0.conv1.weight':
+            post = l20gc1.data.view(-1, 1, 1, 1).expand_as(self.layer2[0].conv1.weight)
+            pre = l11gc2.data.view(1, -1, 1, 1).expand_as(self.layer2[0].conv1.weight)
+            return torch.min(post, pre)
+        elif n == 'layer2.0.conv1.bias':
+            return l20gc1.data.view(-1)
+        elif n == 'layer2.0.conv2.weight':
+            post = l20gc2.data.view(-1, 1, 1, 1).expand_as(self.layer2[0].conv2.weight)
+            pre = l20gc1.data.view(1, -1, 1, 1).expand_as(self.layer2[0].conv2.weight)
+            return torch.min(post, pre)
+        elif n == 'layer2.0.conv2.bias':
+            return l20gc2.data.view(-1)
+        elif n == 'layer2.1.conv1.weight':
+            post = l21gc1.data.view(-1, 1, 1, 1).expand_as(self.layer2[1].conv1.weight)
+            pre = l20gc2.data.view(1, -1, 1, 1).expand_as(self.layer2[1].conv1.weight)
+            return torch.min(post, pre)
+        elif n == 'layer2.1.conv1.bias':
+            return l21gc1.data.view(-1)
+        elif n == 'layer2.1.conv2.weight':
+            post = l21gc2.data.view(-1, 1, 1, 1).expand_as(self.layer2[1].conv2.weight)
+            pre = l21gc1.data.view(1, -1, 1, 1).expand_as(self.layer2[1].conv2.weight)
+            return torch.min(post, pre)
+        elif n == 'layer2.1.conv2.bias':
+            return l21gc2.data.view(-1)
+
+        if n == 'layer3.0.conv1.weight':
+            post = l30gc1.data.view(-1, 1, 1, 1).expand_as(self.layer3[0].conv1.weight)
+            pre = l21gc2.data.view(1, -1, 1, 1).expand_as(self.layer3[0].conv1.weight)
+            return torch.min(post, pre)
+        elif n == 'layer3.0.conv1.bias':
+            return l30gc1.data.view(-1)
+        elif n == 'layer3.0.conv2.weight':
+            post = l30gc2.data.view(-1, 1, 1, 1).expand_as(self.layer3[0].conv2.weight)
+            pre = l30gc1.data.view(1, -1, 1, 1).expand_as(self.layer3[0].conv2.weight)
+            return torch.min(post, pre)
+        elif n == 'layer3.0.conv2.bias':
+            return l30gc2.data.view(-1)
+        elif n == 'layer3.1.conv1.weight':
+            post = l31gc1.data.view(-1, 1, 1, 1).expand_as(self.layer3[1].conv1.weight)
+            pre = l30gc2.data.view(1, -1, 1, 1).expand_as(self.layer3[1].conv1.weight)
+            return torch.min(post, pre)
+        elif n == 'layer3.1.conv1.bias':
+            return l31gc1.data.view(-1)
+        elif n == 'layer3.1.conv2.weight':
+            post = l31gc2.data.view(-1, 1, 1, 1).expand_as(self.layer3[1].conv2.weight)
+            pre = l31gc1.data.view(1, -1, 1, 1).expand_as(self.layer3[1].conv2.weight)
+            return torch.min(post, pre)
+        elif n == 'layer3.1.conv2.bias':
+            return l31gc2.data.view(-1)
+
+        if n == 'layer4.0.conv1.weight':
+            post = l40gc1.data.view(-1, 1, 1, 1).expand_as(self.layer4[0].conv1.weight)
+            pre = l31gc2.data.view(1, -1, 1, 1).expand_as(self.layer4[0].conv1.weight)
+            return torch.min(post, pre)
+        elif n == 'layer4.0.conv1.bias':
+            return l40gc1.data.view(-1)
+        elif n == 'layer4.0.conv2.weight':
+            post = l40gc2.data.view(-1, 1, 1, 1).expand_as(self.layer4[0].conv2.weight)
+            pre = l40gc1.data.view(1, -1, 1, 1).expand_as(self.layer4[0].conv2.weight)
+            return torch.min(post, pre)
+        elif n == 'layer4.0.conv2.bias':
+            return l40gc2.data.view(-1)
+        elif n == 'layer4.1.conv1.weight':
+            post = l41gc1.data.view(-1, 1, 1, 1).expand_as(self.layer4[1].conv1.weight)
+            pre = l40gc2.data.view(1, -1, 1, 1).expand_as(self.layer4[1].conv1.weight)
+            return torch.min(post, pre)
+        elif n == 'layer4.1.conv1.bias':
+            return l41gc1.data.view(-1)
+        elif n == 'layer4.1.conv2.weight':
+            post = l41gc2.data.view(-1, 1, 1, 1).expand_as(self.layer4[1].conv2.weight)
+            pre = l41gc1.data.view(1, -1, 1, 1).expand_as(self.layer4[1].conv2.weight)
+            return torch.min(post, pre)
+        elif n == 'layer4.1.conv2.bias':
+            return l41gc2.data.view(-1)
+
+        return None
 
 
-def _resnet(arch, block, layers, pretrained, progress, **kwargs):
-    model = ResNet(block, layers, **kwargs)
-    if pretrained:
-        state_dict = load_state_dict_from_url(model_urls[arch],
-                                              progress=progress)
-        model.load_state_dict(state_dict)
-    return model
-
-
-def resnet18(pretrained=False, progress=True, **kwargs):
-    r"""ResNet-18 model from
-    `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_
-
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-        progress (bool): If True, displays a progress bar of the download to stderr
-    """
-    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress,
-                   **kwargs)
+def Net(inputsize, taskcla):
+    return ResNet(BasicBlock, [2, 2, 2, 2], taskcla=taskcla)

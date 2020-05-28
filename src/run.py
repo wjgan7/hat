@@ -84,7 +84,8 @@ else:
     if args.approach=='lfl':
         from networks import alexnet_lfl as network
     elif args.approach=='hat':
-        from networks import alexnet_hat as network
+        # from networks import alexnet_hat as network
+        from networks import resnet_hat as network
     elif args.approach=='progressive':
         from networks import alexnet_progressive as network
     elif args.approach=='pathnet':
