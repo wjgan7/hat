@@ -92,12 +92,7 @@ class ResNet(nn.Module):
                              "or a 3-element tuple, got {}".format(replace_stride_with_dilation))
 
         # HAT code
-        self.taskcla = taskcla
-        self.num_tasks = len(self.taskcla)
-        self.ec1 = nn.Embedding(self.num_tasks, self.inplanes)
-        self.last = nn.ModuleList()
-        for _, n in self.taskcla:
-            self.last.append(torch.nn.Linear(512 * block.expansion, n))
+        self.num_tasks = len(taskcla)
 
         self.groups = groups
         self.base_width = width_per_group
@@ -115,6 +110,9 @@ class ResNet(nn.Module):
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.last = nn.ModuleList()
+        for _, n in taskcla:
+            self.last.append(torch.nn.Linear(512 * block.expansion, n))
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -132,6 +130,11 @@ class ResNet(nn.Module):
                     # nn.init.constant_(m.bn3.weight, 0)
                 if isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
+
+        # HAT code
+        self.ec1 = nn.Embedding(self.num_tasks, 64)
+        self.parameter_dict = {n: p for n, p in self.named_parameters()}
+        self.pre_mask = None
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self._norm_layer
@@ -209,118 +212,25 @@ class ResNet(nn.Module):
 
     def get_view_for(self, n, masks):
         gc1 = masks[0]
-        l10gc1, l10gc2 = masks[1:3]
-        l11gc1, l11gc2 = masks[3:5]
-        l20gc1, l20gc2 = masks[5:7]
-        l21gc1, l21gc2 = masks[7:9]
-        l30gc1, l30gc2 = masks[9:11]
-        l31gc1, l31gc2 = masks[11:13]
-        l40gc1, l40gc2 = masks[13:15]
-        l41gc1, l41gc2 = masks[15:17]
         if n == 'conv1.weight':
-            return gc1.data.view(-1, 1, 1, 1).expand_as(self.conv1.weight)
+            self.pre_mask = gc1
+            return gc1.data.view(-1, 1, 1, 1).expand_as(self.parameter_dict[n])
         elif n == 'conv1.bias':
             return gc1.data.view(-1)
 
-        if n == 'layer1.0.conv1.weight':
-            post = l10gc1.data.view(-1, 1, 1, 1).expand_as(self.layer1[0].conv1.weight)
-            pre = gc1.data.view(1, -1, 1, 1).expand_as(self.layer1[0].conv1.weight)
-            return torch.min(post, pre)
-        elif n == 'layer1.0.conv1.bias':
-            return l10gc1.data.view(-1)
-        elif n == 'layer1.0.conv2.weight':
-            post = l10gc2.data.view(-1, 1, 1, 1).expand_as(self.layer1[0].conv2.weight)
-            pre = l10gc1.data.view(1, -1, 1, 1).expand_as(self.layer1[0].conv2.weight)
-            return torch.min(post, pre)
-        elif n == 'layer1.0.conv2.bias':
-            return l10gc2.data.view(-1)
-        elif n == 'layer1.1.conv1.weight':
-            post = l11gc1.data.view(-1, 1, 1, 1).expand_as(self.layer1[1].conv1.weight)
-            pre = l10gc2.data.view(1, -1, 1, 1).expand_as(self.layer1[1].conv1.weight)
-            return torch.min(post, pre)
-        elif n == 'layer1.1.conv1.bias':
-            return l11gc1.data.view(-1)
-        elif n == 'layer1.1.conv2.weight':
-            post = l11gc2.data.view(-1, 1, 1, 1).expand_as(self.layer1[1].conv2.weight)
-            pre = l11gc1.data.view(1, -1, 1, 1).expand_as(self.layer1[1].conv2.weight)
-            return torch.min(post, pre)
-        elif n == 'layer1.1.conv2.bias':
-            return l11gc2.data.view(-1)
-
-        if n == 'layer2.0.conv1.weight':
-            post = l20gc1.data.view(-1, 1, 1, 1).expand_as(self.layer2[0].conv1.weight)
-            pre = l11gc2.data.view(1, -1, 1, 1).expand_as(self.layer2[0].conv1.weight)
-            return torch.min(post, pre)
-        elif n == 'layer2.0.conv1.bias':
-            return l20gc1.data.view(-1)
-        elif n == 'layer2.0.conv2.weight':
-            post = l20gc2.data.view(-1, 1, 1, 1).expand_as(self.layer2[0].conv2.weight)
-            pre = l20gc1.data.view(1, -1, 1, 1).expand_as(self.layer2[0].conv2.weight)
-            return torch.min(post, pre)
-        elif n == 'layer2.0.conv2.bias':
-            return l20gc2.data.view(-1)
-        elif n == 'layer2.1.conv1.weight':
-            post = l21gc1.data.view(-1, 1, 1, 1).expand_as(self.layer2[1].conv1.weight)
-            pre = l20gc2.data.view(1, -1, 1, 1).expand_as(self.layer2[1].conv1.weight)
-            return torch.min(post, pre)
-        elif n == 'layer2.1.conv1.bias':
-            return l21gc1.data.view(-1)
-        elif n == 'layer2.1.conv2.weight':
-            post = l21gc2.data.view(-1, 1, 1, 1).expand_as(self.layer2[1].conv2.weight)
-            pre = l21gc1.data.view(1, -1, 1, 1).expand_as(self.layer2[1].conv2.weight)
-            return torch.min(post, pre)
-        elif n == 'layer2.1.conv2.bias':
-            return l21gc2.data.view(-1)
-
-        if n == 'layer3.0.conv1.weight':
-            post = l30gc1.data.view(-1, 1, 1, 1).expand_as(self.layer3[0].conv1.weight)
-            pre = l21gc2.data.view(1, -1, 1, 1).expand_as(self.layer3[0].conv1.weight)
-            return torch.min(post, pre)
-        elif n == 'layer3.0.conv1.bias':
-            return l30gc1.data.view(-1)
-        elif n == 'layer3.0.conv2.weight':
-            post = l30gc2.data.view(-1, 1, 1, 1).expand_as(self.layer3[0].conv2.weight)
-            pre = l30gc1.data.view(1, -1, 1, 1).expand_as(self.layer3[0].conv2.weight)
-            return torch.min(post, pre)
-        elif n == 'layer3.0.conv2.bias':
-            return l30gc2.data.view(-1)
-        elif n == 'layer3.1.conv1.weight':
-            post = l31gc1.data.view(-1, 1, 1, 1).expand_as(self.layer3[1].conv1.weight)
-            pre = l30gc2.data.view(1, -1, 1, 1).expand_as(self.layer3[1].conv1.weight)
-            return torch.min(post, pre)
-        elif n == 'layer3.1.conv1.bias':
-            return l31gc1.data.view(-1)
-        elif n == 'layer3.1.conv2.weight':
-            post = l31gc2.data.view(-1, 1, 1, 1).expand_as(self.layer3[1].conv2.weight)
-            pre = l31gc1.data.view(1, -1, 1, 1).expand_as(self.layer3[1].conv2.weight)
-            return torch.min(post, pre)
-        elif n == 'layer3.1.conv2.bias':
-            return l31gc2.data.view(-1)
-
-        if n == 'layer4.0.conv1.weight':
-            post = l40gc1.data.view(-1, 1, 1, 1).expand_as(self.layer4[0].conv1.weight)
-            pre = l31gc2.data.view(1, -1, 1, 1).expand_as(self.layer4[0].conv1.weight)
-            return torch.min(post, pre)
-        elif n == 'layer4.0.conv1.bias':
-            return l40gc1.data.view(-1)
-        elif n == 'layer4.0.conv2.weight':
-            post = l40gc2.data.view(-1, 1, 1, 1).expand_as(self.layer4[0].conv2.weight)
-            pre = l40gc1.data.view(1, -1, 1, 1).expand_as(self.layer4[0].conv2.weight)
-            return torch.min(post, pre)
-        elif n == 'layer4.0.conv2.bias':
-            return l40gc2.data.view(-1)
-        elif n == 'layer4.1.conv1.weight':
-            post = l41gc1.data.view(-1, 1, 1, 1).expand_as(self.layer4[1].conv1.weight)
-            pre = l40gc2.data.view(1, -1, 1, 1).expand_as(self.layer4[1].conv1.weight)
-            return torch.min(post, pre)
-        elif n == 'layer4.1.conv1.bias':
-            return l41gc1.data.view(-1)
-        elif n == 'layer4.1.conv2.weight':
-            post = l41gc2.data.view(-1, 1, 1, 1).expand_as(self.layer4[1].conv2.weight)
-            pre = l41gc1.data.view(1, -1, 1, 1).expand_as(self.layer4[1].conv2.weight)
-            return torch.min(post, pre)
-        elif n == 'layer4.1.conv2.bias':
-            return l41gc2.data.view(-1)
+        if n.startswith('layer') and 'conv' in n:
+            layer = int(n[5]) - 1
+            seq = int(n[7])
+            conv = int(n[13]) - 1
+            # print(n, layer, seq, conv)
+            gc = masks[layer * 4 + seq * 2 + conv + 1]
+            if 'weight' in n:
+                post = gc.data.view(-1, 1, 1, 1).expand_as(self.parameter_dict[n])
+                pre = self.pre_mask.data.view(1, -1, 1, 1).expand_as(self.parameter_dict[n])
+                self.pre_mask = gc
+                return torch.min(post, pre)
+            else:
+                return gc.data.view(-1)
 
         return None
 

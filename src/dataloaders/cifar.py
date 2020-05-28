@@ -18,7 +18,13 @@ def get(seed=0,pc_valid=0.10):
 
         # CIFAR10
         dat={}
-        dat['train']=datasets.CIFAR10('../dat/',train=True,download=True,transform=transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean,std)]))
+        train_transform = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std)
+        ])
+        dat['train']=datasets.CIFAR10('../dat/',train=True,download=True,transform=train_transform)
         dat['test']=datasets.CIFAR10('../dat/',train=False,download=True,transform=transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean,std)]))
         for n in range(5):
             data[n]={}
@@ -36,7 +42,7 @@ def get(seed=0,pc_valid=0.10):
 
         # CIFAR100
         dat={}
-        dat['train']=datasets.CIFAR100('../dat/',train=True,download=True,transform=transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean,std)]))
+        dat['train']=datasets.CIFAR100('../dat/',train=True,download=True,transform=train_transform)
         dat['test']=datasets.CIFAR100('../dat/',train=False,download=True,transform=transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean,std)]))
         for n in range(5,10):
             data[n]={}

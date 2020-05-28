@@ -12,7 +12,7 @@ parser.add_argument('--seed',type=int,default=0,help='(default=%(default)d)')
 parser.add_argument('--experiment',default='',type=str,required=True,choices=['mnist2','pmnist','cifar','mixture'],help='(default=%(default)s)')
 parser.add_argument('--approach',default='',type=str,required=True,choices=['random','sgd','sgd-frozen','lwf','lfl','ewc','imm-mean','progressive','pathnet',
                                                                             'imm-mode','sgd-restart',
-                                                                            'joint','hat','hat-test'],help='(default=%(default)s)')
+                                                                            'joint','alexnet-hat','resnet-hat','hat-test'],help='(default=%(default)s)')
 parser.add_argument('--output',default='',type=str,required=False,help='(default=%(default)s)')
 parser.add_argument('--nepochs',default=200,type=int,required=False,help='(default=%(default)d)')
 parser.add_argument('--lr',default=0.05,type=float,required=False,help='(default=%(default)f)')
@@ -69,7 +69,7 @@ elif args.approach=='pathnet':
     from approaches import pathnet as approach
 elif args.approach=='hat-test':
     from approaches import hat_test as approach
-elif args.approach=='hat':
+elif args.approach=='alexnet-hat' or args.approach=='resnet-hat':
     from approaches import hat as approach
 elif args.approach=='joint':
     from approaches import joint as approach
@@ -83,8 +83,9 @@ if args.experiment=='mnist2' or args.experiment=='pmnist':
 else:
     if args.approach=='lfl':
         from networks import alexnet_lfl as network
-    elif args.approach=='hat':
-        # from networks import alexnet_hat as network
+    elif args.approach=='alexnet-hat':
+        from networks import alexnet_hat as network
+    elif args.approach=='resnet-hat':
         from networks import resnet_hat as network
     elif args.approach=='progressive':
         from networks import alexnet_progressive as network
