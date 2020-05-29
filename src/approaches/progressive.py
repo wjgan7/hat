@@ -85,8 +85,8 @@ class Appr(object):
         for i in range(0,len(r),self.sbatch):
             if i+self.sbatch<=len(r): b=r[i:i+self.sbatch]
             else: b=r[i:]
-            images=torch.autograd.Variable(x[b],volatile=False)
-            targets=torch.autograd.Variable(y[b],volatile=False)
+            images=x[b]
+            targets=y[b]
 
             # Forward
             outputs=self.model.forward(images,t)
@@ -96,7 +96,7 @@ class Appr(object):
             # Backward
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm(self.model.parameters(),self.clipgrad)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.clipgrad)
             self.optimizer.step()
 
         return
@@ -114,19 +114,20 @@ class Appr(object):
         for i in range(0,len(r),self.sbatch):
             if i+self.sbatch<=len(r): b=r[i:i+self.sbatch]
             else: b=r[i:]
-            images=torch.autograd.Variable(x[b],volatile=True)
-            targets=torch.autograd.Variable(y[b],volatile=True)
+            images=x[b]
+            targets=y[b]
 
             # Forward
-            outputs=self.model.forward(images,t)
+            with torch.no_grad():
+                outputs=self.model.forward(images,t)
             output=outputs[t]
             loss=self.criterion(output,targets)
             _,pred=output.max(1)
             hits=(pred==targets).float()
 
             # Log
-            total_loss+=loss.data.cpu().numpy()[0]*len(b)
-            total_acc+=hits.sum().data.cpu().numpy()[0]
+            total_loss+=loss.item()*len(b)
+            total_acc+=hits.sum().item()
             total_num+=len(b)
 
         return total_loss/total_num,total_acc/total_num
