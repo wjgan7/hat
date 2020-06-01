@@ -110,6 +110,11 @@ class Appr(object):
 
     def train_epoch(self,t,x,y,thres_cosh=50,thres_emb=6):
         self.model.train()
+        for n, m in self.model.named_modules():
+            if isinstance(m, torch.nn.BatchNorm2d):
+                tid = int(n[-1])
+                if tid < t:
+                    m.eval()
 
         r=np.arange(x.size(0))
         np.random.shuffle(r)
@@ -147,7 +152,7 @@ class Appr(object):
                     p.grad.data*=self.smax/s*num/den
 
             # Apply step
-            torch.nn.utils.clip_grad_norm(self.model.parameters(),self.clipgrad)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.clipgrad)
             self.optimizer.step()
 
             # Constrain embeddings
@@ -177,12 +182,13 @@ class Appr(object):
         for i in range(0,len(r),self.sbatch):
             if i+self.sbatch<=len(r): b=r[i:i+self.sbatch]
             else: b=r[i:]
-            images=torch.autograd.Variable(x[b],volatile=True)
-            targets=torch.autograd.Variable(y[b],volatile=True)
-            task=torch.autograd.Variable(torch.LongTensor([t]).cuda(),volatile=True)
+            images=x[b]
+            targets=y[b]
+            task=torch.LongTensor([t]).cuda()
 
             # Forward
-            outputs,masks=self.model.forward(task,images,s=self.smax)
+            with torch.no_grad():
+                outputs,masks=self.model.forward(task,images,s=self.smax)
             output=outputs[t]
             loss,reg=self.criterion(output,targets,masks)
             _,pred=output.max(1)

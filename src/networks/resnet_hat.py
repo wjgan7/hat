@@ -1,3 +1,5 @@
+import copy
+
 import torch
 import torch.nn as nn
 
@@ -27,27 +29,48 @@ class BasicBlock(nn.Module):
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
         self.conv1 = conv3x3(inplanes, planes, stride)
-        # self.bn1 = norm_layer(planes)
+        self.bn1 = nn.ModuleList()
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(planes, planes)
-        # self.bn2 = norm_layer(planes)
-        self.downsample = downsample
+        self.bn2 = nn.ModuleList()
+        # self.downsample = downsample
         self.stride = stride
+
+        if downsample is not None:
+            self.downsample = True
+            self.convd, bnd = downsample[0], downsample[1]
+            self.bnd = nn.ModuleList()
+        else:
+            self.downsample = None
+
+        for _ in range(num_tasks):
+            self.bn1.append(norm_layer(planes))
+            self.bn2.append(norm_layer(planes))
+            if self.downsample is not None:
+                self.bnd.append(copy.deepcopy(bnd))
 
         # HAT code
         self.ec1 = nn.Embedding(num_tasks, planes)
         self.ec2 = nn.Embedding(num_tasks, planes)
+        if self.downsample is not None:
+            self.ecd = nn.Embedding(num_tasks, planes)
 
     def mask(self, t, s=1):
         gc1 = torch.sigmoid(s * self.ec1(t))
         gc2 = torch.sigmoid(s * self.ec2(t))
-        return [gc1, gc2]
+        masks = [gc1, gc2]
+        if self.downsample is not None:
+            gcd = torch.sigmoid(s * self.ecd(t))
+            masks.append(gcd)
+        return masks
 
-    def forward(self, x, masks):
+    def forward(self, x, t, masks):
         identity = x
 
         # HAT code
-        gc1, gc2 = masks
+        gc1, gc2 = masks[:2]
+        if self.downsample is not None:
+            gcd = masks[2]
 
         out = self.conv1(x)
         # out = self.bn1(out)
@@ -63,7 +86,9 @@ class BasicBlock(nn.Module):
         out = out * gc2.view(1, -1, 1, 1).expand_as(out)
 
         if self.downsample is not None:
-            identity = self.downsample(x)
+            identity = self.convd(x)
+            identity = self.bnd[t](identity)
+            identity = identity * gcd.view(1, -1, 1, 1).expand_as(identity)
 
         out += identity
         out = self.relu(out)
@@ -98,7 +123,9 @@ class ResNet(nn.Module):
         self.base_width = width_per_group
         self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3,
                                bias=False)
-        # self.bn1 = norm_layer(self.inplanes)
+        self.bn1 = nn.ModuleList()
+        for _ in range(self.num_tasks):
+            self.bn1.append(norm_layer(self.inplanes))
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, 64, layers[0])
@@ -134,7 +161,28 @@ class ResNet(nn.Module):
         # HAT code
         self.ec1 = nn.Embedding(self.num_tasks, 64)
         self.parameter_dict = {n: p for n, p in self.named_parameters()}
-        self.pre_mask = None
+        self.mask_data = {
+            'conv1': (0, []),
+            'layer1.0.conv1': (1, [0]),
+            'layer1.0.conv2': (2, [1]),
+            'layer1.1.conv1': (3, [2]),
+            'layer1.1.conv2': (4, [3]),
+            'layer2.0.conv1': (5, [4]),
+            'layer2.0.conv2': (6, [5]),
+            'layer2.0.convd': (7, [4]),
+            'layer2.1.conv1': (8, [6, 7]),
+            'layer2.1.conv2': (9, [8]),
+            'layer3.0.conv1': (10, [9]),
+            'layer3.0.conv2': (11, [10]),
+            'layer3.0.convd': (12, [9]),
+            'layer3.1.conv1': (13, [11, 12]),
+            'layer3.1.conv2': (14, [13]),
+            'layer4.0.conv1': (15, [14]),
+            'layer4.0.conv2': (16, [15]),
+            'layer4.0.convd': (17, [14]),
+            'layer4.1.conv1': (18, [16, 17]),
+            'layer4.1.conv2': (19, [18]),
+        }
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self._norm_layer
@@ -146,7 +194,7 @@ class ResNet(nn.Module):
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
                 conv1x1(self.inplanes, planes * block.expansion, stride),
-                # norm_layer(planes * block.expansion),
+                norm_layer(planes * block.expansion),
             )
 
         layers = []
@@ -183,21 +231,21 @@ class ResNet(nn.Module):
         gc1 = masks[0]
 
         x = self.conv1(x)
-        # x = self.bn1(x)
+        x = self.bn1[t](x)
         x = self.relu(x)
         x = self.maxpool(x)
 
         # HAT code
         x = x * gc1.view(1, -1, 1, 1).expand_as(x)
 
-        x = self.layer1[0](x, masks[1:3])
-        x = self.layer1[1](x, masks[3:5])
-        x = self.layer2[0](x, masks[5:7])
-        x = self.layer2[1](x, masks[7:9])
-        x = self.layer3[0](x, masks[9:11])
-        x = self.layer3[1](x, masks[11:13])
-        x = self.layer4[0](x, masks[13:15])
-        x = self.layer4[1](x, masks[15:17])
+        x = self.layer1[0](x, t, masks[1:3])
+        x = self.layer1[1](x, t, masks[3:5])
+        x = self.layer2[0](x, t, masks[5:8])
+        x = self.layer2[1](x, t, masks[8:10])
+        x = self.layer3[0](x, t, masks[10:13])
+        x = self.layer3[1](x, t, masks[13:15])
+        x = self.layer4[0](x, t, masks[15:18])
+        x = self.layer4[1](x, t, masks[18:20])
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
@@ -211,26 +259,18 @@ class ResNet(nn.Module):
         return self._forward_impl(t, x, s)
 
     def get_view_for(self, n, masks):
-        gc1 = masks[0]
-        if n == 'conv1.weight':
-            self.pre_mask = gc1
-            return gc1.data.view(-1, 1, 1, 1).expand_as(self.parameter_dict[n])
-        elif n == 'conv1.bias':
-            return gc1.data.view(-1)
-
-        if n.startswith('layer') and 'conv' in n:
-            layer = int(n[5]) - 1
-            seq = int(n[7])
-            conv = int(n[13]) - 1
-            # print(n, layer, seq, conv)
-            gc = masks[layer * 4 + seq * 2 + conv + 1]
-            if 'weight' in n:
-                post = gc.data.view(-1, 1, 1, 1).expand_as(self.parameter_dict[n])
-                pre = self.pre_mask.data.view(1, -1, 1, 1).expand_as(self.parameter_dict[n])
-                self.pre_mask = gc
-                return torch.min(post, pre)
-            else:
-                return gc.data.view(-1)
+        if 'conv' in n and n.endswith('.weight'):
+            module_name = n[:-7]
+            mask_idx, mask_pre_idx = self.mask_data[module_name]
+            post = masks[mask_idx].data.view(-1, 1, 1, 1).expand_as(self.parameter_dict[n])
+            for idx in mask_pre_idx:
+                pre = masks[idx].data.view(1, -1, 1, 1).expand_as(self.parameter_dict[n])
+                post = torch.min(post, pre)
+            return post
+        elif 'conv' in n and n.endswith('.bias'):
+            module_name = n[:-5]
+            mask_idx, _ = self.mask_data[module_name]
+            return masks[mask_idx].data.view(-1)
 
         return None
 
