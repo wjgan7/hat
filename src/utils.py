@@ -124,9 +124,9 @@ def cross_entropy(outputs,targets,exp=1,size_average=True,eps=1e-5):
 ########################################################################################################################
 
 def set_req_grad(layer,req_grad):
-    if hasattr(layer,'weight'):
+    if hasattr(layer,'weight') and layer.weight is not None:
         layer.weight.requires_grad=req_grad
-    if hasattr(layer,'bias'):
+    if hasattr(layer,'bias') and layer.bias is not None:
         layer.bias.requires_grad=req_grad
     return
 

@@ -20,11 +20,13 @@ class Appr(object):
         self.criterion=torch.nn.CrossEntropyLoss()
         self.optimizer=self._get_optimizer()
 
+        self.seen_parameters = {}
+
         return
 
     def _get_optimizer(self,lr=None):
         if lr is None: lr=self.lr
-        return torch.optim.SGD(filter(lambda p: p.requires_grad, self.model.parameters()),lr=lr)
+        return torch.optim.SGD(filter(lambda p: p.requires_grad, self.model.parameters()),lr=lr, weight_decay=1e-4)
 
     def train(self,t,xtrain,ytrain,xvalid,yvalid):
         best_loss=np.inf
@@ -76,6 +78,11 @@ class Appr(object):
 
     def train_epoch(self,t,x,y):
         self.model.train()
+        for n, m in self.model.named_modules():
+            if isinstance(m, torch.nn.BatchNorm2d):
+                tid = int(n[-1])
+                if tid < t:
+                    m.eval()
 
         r=np.arange(x.size(0))
         np.random.shuffle(r)

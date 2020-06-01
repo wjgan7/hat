@@ -10,7 +10,8 @@ tstart=time.time()
 parser=argparse.ArgumentParser(description='xxx')
 parser.add_argument('--seed',type=int,default=0,help='(default=%(default)d)')
 parser.add_argument('--experiment',default='',type=str,required=True,choices=['mnist2','pmnist','cifar','mixture'],help='(default=%(default)s)')
-parser.add_argument('--approach',default='',type=str,required=True,choices=['random','sgd','sgd-frozen','lwf','lfl','ewc','imm-mean','progressive','pathnet',
+parser.add_argument('--approach',default='',type=str,required=True,choices=['random','sgd','sgd-frozen','lwf','lfl','ewc','imm-mean',
+                                                                            'alexnet-progressive','resnet-progressive','pathnet',
                                                                             'imm-mode','sgd-restart',
                                                                             'joint','alexnet-hat','resnet-hat','hat-test'],help='(default=%(default)s)')
 parser.add_argument('--output',default='',type=str,required=False,help='(default=%(default)s)')
@@ -63,7 +64,7 @@ elif args.approach=='imm-mean':
     from approaches import imm_mean as approach
 elif args.approach=='imm-mode':
     from approaches import imm_mode as approach
-elif args.approach=='progressive':
+elif args.approach=='alexnet-progressive' or args.approach=='resnet-progressive':
     from approaches import progressive as approach
 elif args.approach=='pathnet':
     from approaches import pathnet as approach
@@ -87,8 +88,10 @@ else:
         from networks import alexnet_hat as network
     elif args.approach=='resnet-hat':
         from networks import resnet_hat as network
-    elif args.approach=='progressive':
+    elif args.approach=='alexnet-progressive':
         from networks import alexnet_progressive as network
+    elif args.approach=='resnet-progressive':
+        from networks import resnet_progressive as network
     elif args.approach=='pathnet':
         from networks import alexnet_pathnet as network
     elif args.approach=='hat-test':
